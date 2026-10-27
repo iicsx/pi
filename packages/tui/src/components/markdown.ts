@@ -1,9 +1,10 @@
 import { Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens } from "marked";
 import markedCjkFriendly from "marked-cjk-friendly";
+import { getKeybindings } from "../keybindings.ts";
 import { renderLatex } from "../latex.ts";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
-import type { Component } from "../tui.ts";
-import { applyBackgroundToLine, flattenLines, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
+import type { Component, TuiMouseEvent } from "../tui.ts";
+import { applyBackgroundToLine, flattenLines, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
 
@@ -23,6 +24,36 @@ class StrictStrikethroughTokenizer extends Tokenizer {
 		};
 	}
 }
+
+interface DetailsToken extends Tokens.Generic {
+	type: "details";
+	raw: string;
+	summary: string;
+	body: string;
+	open: boolean;
+}
+
+const detailsExtension: TokenizerExtension = {
+	name: "details",
+	level: "block",
+	start(source) {
+		const index = source.search(/^ {0,3}<details(?:\s|>)/im);
+		return index < 0 ? undefined : index;
+	},
+	tokenizer(source) {
+		const match = /^( {0,3}<details\b([^>]*)>\s*\n?)([\s\S]*?)<\/details\s*>[ \t]*(?:\n|$)/i.exec(source);
+		if (!match) return undefined;
+		const summaryMatch = /<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/i.exec(match[3]);
+		const body = summaryMatch ? match[3].slice(summaryMatch.index + summaryMatch[0].length) : match[3];
+		return {
+			type: "details",
+			raw: match[0],
+			summary: summaryMatch?.[1]?.trim() || "Details",
+			body: body.trim(),
+			open: /(?:^|\s)open(?:\s|=|$)/i.test(match[2] ?? ""),
+		} as DetailsToken;
+	},
+};
 
 interface LatexToken extends Tokens.Generic {
 	type: "latex" | "latexBlock";
@@ -120,21 +151,39 @@ function tokenizeBlockLatex(source: string): LatexToken | undefined {
 	// opener or stays pending, swallowing the table. See https://github.com/earendil-works/pi/issues/11159.
 	const dollarMatch = /^ {0,3}\$\$[ \t]*(?:\n)?([\s\S]*?)\$\$[ \t]*(?:\n|$)/.exec(source);
 	if (dollarMatch?.[1] && !containsTableStart(dollarMatch[1])) {
-		return { type: "latexBlock", raw: dollarMatch[0], text: dollarMatch[1].trim() };
+		return {
+			type: "latexBlock",
+			raw: dollarMatch[0],
+			text: dollarMatch[1].trim(),
+		};
 	}
 
 	const bracketMatch = /^ {0,3}\\\[[ \t]*(?:\n)?([\s\S]*?)\\\][ \t]*(?:\n|$)/.exec(source);
 	if (bracketMatch?.[1] && !containsTableStart(bracketMatch[1])) {
-		return { type: "latexBlock", raw: bracketMatch[0], text: bracketMatch[1].trim() };
+		return {
+			type: "latexBlock",
+			raw: bracketMatch[0],
+			text: bracketMatch[1].trim(),
+		};
 	}
 
 	const pendingBracket = /^ {0,3}\\\[[ \t]*(?:\n)?([\s\S]*)$/.exec(source);
 	if (pendingBracket?.[1] && !containsTableStart(pendingBracket[1])) {
-		return { type: "latexBlock", raw: pendingBracket[0], text: pendingBracket[1], pending: true };
+		return {
+			type: "latexBlock",
+			raw: pendingBracket[0],
+			text: pendingBracket[1],
+			pending: true,
+		};
 	}
 	const pendingDollar = /^ {0,3}\$\$[ \t]*(?:\n)?([\s\S]*)$/.exec(source);
 	if (pendingDollar?.[1] && looksLikePendingDollarMath(pendingDollar[1]) && !containsTableStart(pendingDollar[1])) {
-		return { type: "latexBlock", raw: pendingDollar[0], text: pendingDollar[1], pending: true };
+		return {
+			type: "latexBlock",
+			raw: pendingDollar[0],
+			text: pendingDollar[1],
+			pending: true,
+		};
 	}
 	return undefined;
 }
@@ -193,7 +242,7 @@ markdownParser.setOptions({
 });
 markdownParser.use({
 	tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
-	extensions: [...LATEX_MARKDOWN_EXTENSIONS],
+	extensions: [...LATEX_MARKDOWN_EXTENSIONS, detailsExtension],
 });
 
 /**
@@ -248,6 +297,8 @@ export interface MarkdownOptions {
 	transform?: (markdown: string, availableWidth: number) => string;
 	/** Render supported LaTeX math expressions as Unicode text (default: true). */
 	renderLatex?: boolean;
+	/** Draw fenced code blocks with rounded, transparent borders. */
+	roundedCodeBlocks?: boolean;
 }
 
 interface InlineStyleContext {
@@ -263,6 +314,9 @@ export class Markdown implements Component {
 	private theme: MarkdownTheme;
 	private options: MarkdownOptions;
 	private defaultStylePrefix?: string;
+	private detailsOpen = new Map<string, boolean>();
+	private detailsRows: Array<{ key: string; sourceY: number; y: number; open: boolean }> = [];
+	private focusedDetails?: string;
 
 	// Cache for rendered output
 	private cachedText?: string;
@@ -291,6 +345,9 @@ export class Markdown implements Component {
 
 	setText(text: string): void {
 		this.text = text;
+		this.detailsOpen.clear();
+		this.detailsRows = [];
+		this.focusedDetails = undefined;
 		this.invalidate();
 	}
 
@@ -333,10 +390,15 @@ export class Markdown implements Component {
 		}
 
 		// Convert tokens to styled terminal output
+		this.detailsRows = [];
 		const renderedLines: string[] = [];
 
 		for (let i = 0; i < tokens.length; i++) {
 			const token = tokens[i];
+			if (token.type === "details") {
+				const details = token as DetailsToken;
+				this.detailsRows.push({ key: token.raw, sourceY: renderedLines.length, y: 0, open: details.open });
+			}
 			const nextToken = tokens[i + 1];
 			const tokenLines = this.renderToken(token, contentWidth, nextToken?.type);
 			for (const tokenLine of tokenLines) {
@@ -346,7 +408,11 @@ export class Markdown implements Component {
 
 		// Wrap lines (NO padding, NO background yet)
 		const wrappedLines: string[] = [];
-		for (const line of renderedLines) {
+		for (let lineIndex = 0; lineIndex < renderedLines.length; lineIndex++) {
+			const line = renderedLines[lineIndex];
+			for (const row of this.detailsRows) {
+				if (row.sourceY === lineIndex) row.y = wrappedLines.length + this.paddingY;
+			}
 			if (isImageLine(line)) {
 				wrappedLines.push(line);
 			} else {
@@ -492,6 +558,28 @@ export class Markdown implements Component {
 		const lines: string[] = [];
 
 		switch (token.type) {
+			case "details": {
+				const details = token as DetailsToken;
+				const key = details.raw;
+				const opened = this.detailsOpen.get(key) ?? details.open;
+				lines.push(
+					`${opened ? "▼" : "▶"} ${this.renderInlineTokens(markdownParser.Lexer.lexInline(details.summary))}`,
+				);
+				if (opened && details.body) {
+					const children = markdownParser.lexer(details.body);
+					for (let i = 0; i < children.length; i++) {
+						for (const line of this.renderToken(
+							children[i],
+							Math.max(1, width - 2),
+							children[i + 1]?.type,
+							styleContext,
+						)) {
+							lines.push(`  ${line}`);
+						}
+					}
+				}
+				break;
+			}
 			case "heading": {
 				const headingLevel = token.depth;
 				const headingPrefix = `${"#".repeat(headingLevel)} `;
@@ -550,21 +638,30 @@ export class Markdown implements Component {
 			}
 
 			case "code": {
-				const indent = this.theme.codeBlockIndent ?? "  ";
-				lines.push(this.theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
-				if (this.theme.highlightCode) {
-					const highlightedLines = this.theme.highlightCode(token.text, token.lang);
-					for (const hlLine of highlightedLines) {
-						lines.push(`${indent}${hlLine}`);
+				const highlightedLines = this.theme.highlightCode
+					? this.theme.highlightCode(token.text, token.lang)
+					: token.text.split("\n").map((line: string) => this.theme.codeBlock(line));
+				if (this.options.roundedCodeBlocks && width >= 5) {
+					const innerWidth = width - 4;
+					const label = token.lang?.trim() ?? "";
+					const topLabel = label ? ` ${truncateToWidth(label, Math.max(0, width - 4))} ` : "";
+					const topFill = Math.max(0, width - 2 - visibleWidth(topLabel));
+					lines.push(this.theme.codeBlockBorder(`╭${topLabel}${"─".repeat(topFill)}╮`));
+					for (const sourceLine of highlightedLines) {
+						const wrapped = wrapTextWithAnsi(sourceLine, innerWidth);
+						for (const codeLine of wrapped.length ? wrapped : [""]) {
+							lines.push(
+								`${this.theme.codeBlockBorder("│")} ${codeLine}${" ".repeat(Math.max(0, innerWidth - visibleWidth(codeLine)))} ${this.theme.codeBlockBorder("│")}`,
+							);
+						}
 					}
+					lines.push(this.theme.codeBlockBorder(`╰${"─".repeat(width - 2)}╯`));
 				} else {
-					// Split code by newlines and style each line
-					const codeLines = token.text.split("\n");
-					for (const codeLine of codeLines) {
-						lines.push(`${indent}${this.theme.codeBlock(codeLine)}`);
-					}
+					const indent = this.theme.codeBlockIndent ?? "  ";
+					lines.push(this.theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
+					for (const codeLine of highlightedLines) lines.push(`${indent}${codeLine}`);
+					lines.push(this.theme.codeBlockBorder("```"));
 				}
-				lines.push(this.theme.codeBlockBorder("```"));
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after code blocks (unless space token follows)
 				}
@@ -679,6 +776,28 @@ export class Markdown implements Component {
 		}
 
 		return lines;
+	}
+
+	handleMouse(event: TuiMouseEvent): { handled: boolean; focus?: boolean } | undefined {
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		const row = this.detailsRows.find((item) => item.y === event.y);
+		if (!row) return undefined;
+		this.toggleDetails(row.key);
+		this.focusedDetails = row.key;
+		return { handled: true, focus: true };
+	}
+
+	handleInput(data: string): void {
+		if (this.focusedDetails && getKeybindings().matches(data, "tui.markdown.toggleDetails")) {
+			this.toggleDetails(this.focusedDetails);
+		}
+	}
+
+	private toggleDetails(key: string): void {
+		const row = this.detailsRows.find((item) => item.key === key);
+		if (!row) return;
+		this.detailsOpen.set(key, !(this.detailsOpen.get(key) ?? row.open));
+		this.invalidate();
 	}
 
 	private renderInlineTokens(tokens: Token[], styleContext?: InlineStyleContext): string {
@@ -819,7 +938,7 @@ export class Markdown implements Component {
 				: this.options.preserveOrderedListMarkers
 					? (this.getUnorderedListMarker(item) ?? "- ")
 					: "- ";
-			const taskMarker = item.task ? `[${item.checked ? "x" : " "}] ` : "";
+			const taskMarker = item.task ? `${item.checked ? "☑" : "☐"} ` : "";
 			const marker = bullet + taskMarker;
 			const firstPrefix = indent + this.theme.listBullet(marker);
 			const continuationPrefix = indent + " ".repeat(visibleWidth(marker));

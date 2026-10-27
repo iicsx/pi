@@ -120,6 +120,16 @@ describe("theme syntax highlighting", () => {
 		expect(lines[1]).toBe(`${theme.getFgAnsi("toolDiffAdded")}+new\x1b[39m`);
 	});
 
+	it("highlights Markdown syntax inside fenced Markdown code blocks", async () => {
+		await loadAllHighlightLanguages();
+		const lines = highlightCode("## heading\n- item\n> quote\n`inline`", "markdown");
+
+		expect(lines[0]).toContain(theme.getFgAnsi("mdHeading"));
+		expect(lines[1]).toContain(theme.getFgAnsi("mdListBullet"));
+		expect(lines[2]).toContain(theme.getFgAnsi("mdQuote"));
+		expect(lines[3]).toContain(theme.getFgAnsi("mdCode"));
+	});
+
 	it("keeps cli-highlight default styled scopes mapped to theme styles", () => {
 		expect(highlightCode("const re = /foo+/gi;", "javascript")[0]).toContain(
 			`${theme.getFgAnsi("syntaxString")}/foo+/gi\x1b[39m`,

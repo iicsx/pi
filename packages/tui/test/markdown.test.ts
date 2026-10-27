@@ -6,6 +6,7 @@ import { Markdown, type MarkdownTheme } from "../src/components/markdown.ts";
 import { resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.ts";
 import type { Component, TUI } from "../src/tui.ts";
 import { TuiMainScreen } from "../src/tui-main-screen.ts";
+import { visibleWidth } from "../src/utils.ts";
 import { defaultMarkdownTheme } from "./test-themes.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
@@ -225,7 +226,42 @@ describe("Markdown component", () => {
 
 			const lines = markdown.render(80).map((line) => stripAnsi(line).trimEnd());
 
-			assert.deepStrictEqual(lines, ["- [ ] beep", "- [x] boop"]);
+			assert.deepStrictEqual(lines, ["- ☐ beep", "- ☑ boop"]);
+		});
+
+		it("renders details as a keyboard- and mouse-toggleable disclosure", () => {
+			const markdown = new Markdown(
+				"<details>\n<summary>Extra</summary>\n\n- [ ] first\n</details>",
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+			const closedLines = markdown.render(40).map(stripAnsi);
+			assert.ok(closedLines[0]?.includes("▶ Extra"));
+			assert.ok(!closedLines.some((line) => line.includes("first")));
+
+			const mouseResult = markdown.handleMouse?.({
+				type: "click",
+				button: "left",
+				x: 0,
+				y: 0,
+				screenX: 0,
+				screenY: 0,
+				width: 40,
+				height: closedLines.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+			});
+			assert.deepStrictEqual(mouseResult, { handled: true, focus: true });
+			const openLines = markdown.render(40).map(stripAnsi);
+			assert.ok(openLines[0]?.includes("▼ Extra"));
+			assert.ok(openLines.some((line) => line.includes("☐ first")));
+
+			markdown.handleInput?.("\r");
+			const collapsedLines = markdown.render(40).map(stripAnsi);
+			assert.ok(collapsedLines[0]?.includes("▶ Extra"));
+			assert.ok(!collapsedLines.some((line) => line.includes("first")));
 		});
 
 		it("should maintain numbering when code blocks are not indented (LLM output)", () => {
@@ -1815,6 +1851,19 @@ bar`,
 				joinedPlain.includes("hidden content") || joinedPlain.includes("<thinking>"),
 				"Should render HTML-like tags or their content as text, not hide them",
 			);
+		});
+
+		it("renders rounded code blocks without filling their background", () => {
+			const markdown = new Markdown("```js\nconst x = 1;\n```", 0, 0, defaultMarkdownTheme, undefined, {
+				roundedCodeBlocks: true,
+			});
+			const lines = markdown.render(24).map(stripAnsi);
+
+			assert.ok(lines[0].startsWith("╭ js "));
+			assert.ok(lines[1].startsWith("│ const x = 1;"));
+			assert.ok(lines.at(-1)?.startsWith("╰"));
+			assert.ok(lines.every((line) => visibleWidth(line) <= 24));
+			assert.ok(lines.every((line) => !line.includes("```")));
 		});
 
 		it("should render HTML tags in code blocks correctly", () => {

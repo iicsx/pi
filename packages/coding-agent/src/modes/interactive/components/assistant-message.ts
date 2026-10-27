@@ -137,6 +137,7 @@ export class AssistantMessageComponent extends Container {
 							this.messageId,
 							this.timestamp,
 						),
+						roundedCodeBlocks: true,
 					}),
 				);
 			} else if (content.type === "thinking") {
@@ -182,6 +183,7 @@ export class AssistantMessageComponent extends Container {
 									this.messageId,
 									this.timestamp,
 								),
+								roundedCodeBlocks: true,
 							},
 						);
 				addVisibleChild(

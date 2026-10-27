@@ -886,6 +886,11 @@ let cachedCliHighlightTheme: CliHighlightTheme | undefined;
 
 function buildCliHighlightTheme(t: Theme): CliHighlightTheme {
 	return {
+		section: (s: string) => t.fg("mdHeading", s),
+		bullet: (s: string) => t.fg("mdListBullet", s),
+		code: (s: string) => t.fg("mdCode", s),
+		quote: (s: string) => t.fg("mdQuote", s),
+		symbol: (s: string) => t.fg("mdLink", s),
 		keyword: (s: string) => t.fg("syntaxKeyword", s),
 		built_in: (s: string) => t.fg("syntaxType", s),
 		literal: (s: string) => t.fg("syntaxNumber", s),
@@ -909,7 +914,7 @@ function buildCliHighlightTheme(t: Theme): CliHighlightTheme {
 		punctuation: (s: string) => t.fg("syntaxPunctuation", s),
 		emphasis: (s: string) => t.italic(s),
 		strong: (s: string) => t.bold(s),
-		link: (s: string) => t.underline(s),
+		link: (s: string) => t.underline(t.fg("mdLinkUrl", s)),
 		addition: (s: string) => t.fg("toolDiffAdded", s),
 		deletion: (s: string) => t.fg("toolDiffRemoved", s),
 	};
