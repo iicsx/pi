@@ -25,6 +25,7 @@ import type {
 	Cursor,
 	DocumentObserver,
 	DocumentReader,
+	Entry,
 	EntryDraft,
 	EntryId,
 	EntryQuery,
@@ -44,6 +45,7 @@ import type {
 	TaskRecord,
 	TaskState,
 	Tx,
+	TypedEntry,
 } from "../types.ts";
 import type { TaskGraph, TaskGraphWatch } from "./task-graph.ts";
 import type { UsageState } from "./usage.ts";
@@ -77,7 +79,8 @@ export type SubmissionDraft = {
 			readonly whenBusy?: "steer" | "followUp" | "reject";
 			/**
 			 * `reject`: an idle conversation (no run) rejects the input with `ConversationIdle` and writes nothing, so the input
-			 * never starts a run. With `whenBusy: "steer"` it steers the current run or is refused.
+			 * never starts a run of its own. With `whenBusy: "steer"` it steers the current run or is refused; a run that
+			 * answered and waits for its `afterRun` tasks is still busy, and such an input queues and starts the next run.
 			 */
 			readonly whenIdle?: "reject";
 			/** Place the input as this entry; default `pi.user` without data. The kind must not start with `pi.`. */
@@ -933,7 +936,10 @@ export interface Harness extends Session {
 	observeTaskGraph(observer: Observer<TaskGraph>, context: Context): Promise<Observation<TaskGraph>>;
 }
 
-/** What a hook may use: committed reads and the asking task's memos, which hooks and the task share. */
+/**
+ * What a hook may use: committed reads and the asking task's memos, which hooks and the task share. Hooks run off the
+ * Session line, so reads see what is committed when they run; a hook rerun after a crash may see more.
+ */
 export interface HookApi extends DocumentReader {
 	readonly taskId: TaskId;
 	readonly conversationId: ConversationId;
@@ -941,6 +947,17 @@ export interface HookApi extends DocumentReader {
 	readonly models: Models;
 	memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
 	memo<T extends JsonValue>(name: string, candidate: T, context: Context): Promise<T>;
+	/** Committed entry visible from the task's conversation, as `TaskRuntime.entry()`. */
+	entry(id: EntryId, context: Context): Promise<EntryRecord | undefined>;
+	/** Undefined when the entry is absent, not visible, or has another kind. */
+	entry<D extends JsonValue>(token: Entry<D>, id: EntryId, context: Context): Promise<TypedEntry<D> | undefined>;
+	/** Committed raw history of the task's conversation, as `TaskRuntime.entries()`. */
+	entries(
+		query: Omit<EntryQuery, "conversationId">,
+		limit: number,
+		cursor: Cursor | undefined,
+		context: Context,
+	): Promise<Page<EntryRecord, Cursor>>;
 }
 
 export type HookResult<T> = T | undefined | Promise<T | undefined>;
@@ -959,7 +976,33 @@ export interface GenerationHooks {
 	onYield(answer: AssistantMessage, api: HookApi, context: Context): HookResult<{ readonly continue: UserInput }>;
 	/** After every tool of the round is terminal; `results` are the round's result entries in call order. */
 	afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): void | Promise<void>;
+	/**
+	 * After a run answered, its answer committed and its inputs settled `done`: a final answer, or a `terminate` round;
+	 * not when an `onYield` continuation is taken, and never after a failure or an abort. The requested tasks of every
+	 * hook are created together as children of the generation, which keeps the run, and the conversation busy, until
+	 * they are terminal; then queued items are placed and the run ends (spec §8.3). A crash before they are created asks
+	 * again; once created, never again for this run.
+	 */
+	afterRun(run: RunSummary, api: HookApi, context: Context): HookResult<{ readonly tasks: readonly RunEndTask[] }>;
 }
+
+/** How a run ended, for `afterRun` hooks. Read the run's history with `api.entries({ minEntryId: first, maxEntryId: last })`. */
+export type RunSummary = {
+	/** A final answer, or a tool round whose every call asked to `terminate`. */
+	readonly reason: "answer" | "terminate";
+	/**
+	 * The run's first entry (`LiveRun.first`): the first one the boundary that started it placed, for a continue the failed
+	 * run's it continues, otherwise its first tool-calling answer; the answer itself for a run that has none of these.
+	 */
+	readonly first: EntryId;
+	/** The answer, or the terminating round's tool-calling answer, whose results follow it. */
+	readonly answer: EntryId;
+	/** The run's last entry: the answer; for a `terminate` round its newest result, or the reset of its handoff. */
+	readonly last: EntryId;
+};
+
+/** A task an `afterRun` hook asks for, built by `runEndTask()`. */
+export type RunEndTask = { readonly task: AnyTask; readonly input: JsonValue };
 
 /** A call as tool hooks see it; `parent` is set for a nested call, one a running tool made through `executeTool()`. */
 export type ToolHookCall = ToolCall & {
