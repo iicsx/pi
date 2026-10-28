@@ -11,8 +11,8 @@ import {
 } from "../../../core/tools/truncate.ts";
 import { stripAnsi } from "../../../utils/ansi.ts";
 import { theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
+import { RoundedBorder } from "./rounded-border.ts";
 import { truncateToVisualLines } from "./visual-truncate.ts";
 
 // Preview line limit when not expanded (matches tool execution behavior)
@@ -42,12 +42,9 @@ export class BashExecutionComponent extends Container {
 		// Add spacer
 		this.addChild(new Spacer(1));
 
-		// Top border
-		this.addChild(new DynamicBorder(borderColor));
-
-		// Content container (holds dynamic content between borders)
+		// Content container with a transparent rounded frame.
 		this.contentContainer = new Container();
-		this.addChild(this.contentContainer);
+		this.addChild(new RoundedBorder(this.contentContainer, borderColor, " Shell"));
 
 		this.loader = new Loader(
 			ui,
@@ -55,9 +52,6 @@ export class BashExecutionComponent extends Container {
 			(text) => theme.fg("muted", text),
 			`Running... (${keyText("tui.select.cancel")} to cancel)`, // Plain text for loader
 		);
-
-		// Bottom border
-		this.addChild(new DynamicBorder(borderColor));
 
 		this.updateDisplay();
 	}

@@ -641,10 +641,10 @@ export class Markdown implements Component {
 				const highlightedLines = this.theme.highlightCode
 					? this.theme.highlightCode(token.text, token.lang)
 					: token.text.split("\n").map((line: string) => this.theme.codeBlock(line));
-				if (this.options.roundedCodeBlocks && width >= 5) {
+				if (this.options.roundedCodeBlocks && width >= 7) {
 					const innerWidth = width - 4;
-					const label = token.lang?.trim() ?? "";
-					const topLabel = label ? ` ${truncateToWidth(label, Math.max(0, width - 4))} ` : "";
+					const label = token.lang?.trim() ?? "Code";
+					const topLabel = `  ${truncateToWidth(label, Math.max(0, width - 6))} `;
 					const topFill = Math.max(0, width - 2 - visibleWidth(topLabel));
 					lines.push(this.theme.codeBlockBorder(`╭${topLabel}${"─".repeat(topFill)}╮`));
 					for (const sourceLine of highlightedLines) {

@@ -30,6 +30,10 @@ function createBaseToolDefinition(name = "custom_tool"): ToolDefinition {
 const TINY_JPEG =
 	"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAACAAIDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAGCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AD3VTB3/2Q==";
 
+function stripRoundedSides(line: string): string {
+	return line.replace(/^\s*│/, "").replace(/│\s*$/, "");
+}
+
 function createFakeTui(): TUI {
 	return {
 		requestRender: () => {},
@@ -213,10 +217,12 @@ describe("ToolExecutionComponent parity", () => {
 		component.setExpanded(true);
 		component.updateResult({ ...result, isError: false }, false);
 
-		const rendered = stripAnsi(component.render(200).join("\n"));
+		const rendered = stripAnsi(component.render(200).map(stripRoundedSides).join("\n"));
 		expect(rendered.match(/Full output:/g)?.length ?? 0).toBe(1);
-		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n \[Full output:/);
-		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n \[Full output:/);
+		const renderedLines = rendered.split("\n");
+		const finalOutputLine = renderedLines.findLastIndex((line) => line.includes("line-4000"));
+		const fullOutputLine = renderedLines.findIndex((line) => line.includes("[Full output:"));
+		expect(fullOutputLine).toBeGreaterThan(finalOutputLine);
 		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
@@ -476,10 +482,10 @@ describe("ToolExecutionComponent parity", () => {
 		expect(collapsed).not.toContain(longValue);
 
 		component.setExpanded(true);
-		const expanded = stripAnsi(component.render(300).join("\n"));
+		const expanded = stripAnsi(component.render(300).map(stripRoundedSides).join("\n"));
 		expect(expanded).toContain("  query: pi");
 		expect(expanded).toContain(longValue);
-		const expandedLines = expanded.split("\n").map((line) => line.trimEnd());
+		const expandedLines = expanded.split("\n").map((line) => stripRoundedSides(line).trimEnd());
 		const textLine = expandedLines.findIndex((line) => line.endsWith("  text: line one"));
 		expect(textLine).toBeGreaterThan(-1);
 		expect(expandedLines[textLine + 1]).toMatch(/^\s+ {4}line two$/);

@@ -1859,7 +1859,7 @@ bar`,
 			});
 			const lines = markdown.render(24).map(stripAnsi);
 
-			assert.ok(lines[0].startsWith("╭ js "));
+			assert.ok(lines[0].startsWith("╭  js "));
 			assert.ok(lines[1].startsWith("│ const x = 1;"));
 			assert.ok(lines.at(-1)?.startsWith("╰"));
 			assert.ok(lines.every((line) => visibleWidth(line) <= 24));
