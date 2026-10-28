@@ -8,6 +8,7 @@
 
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { renderDiff } from "../../../modes/interactive/components/diff.ts";
+import { RoundedBorder } from "../../../modes/interactive/components/rounded-border.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../../extensions/types.ts";
 import type { EditToolDetails } from "../edit.ts";
@@ -36,7 +37,7 @@ type EditCallRenderComponent = Box & {
 	settledError?: boolean;
 };
 function createEditCallRenderComponent(): EditCallRenderComponent {
-	return Object.assign(new Box(1, 1, (text: string) => text), {
+	return Object.assign(new Box(1, 1), {
 		preview: undefined as EditPreview | undefined,
 		previewArgsKey: undefined as string | undefined,
 		previewPending: false,
@@ -112,22 +113,6 @@ function formatEditResult(
 
 	return undefined;
 }
-function getEditHeaderBg(
-	preview: EditPreview | undefined,
-	settledError: boolean | undefined,
-	theme: Theme,
-): (text: string) => string {
-	if (preview) {
-		if ("error" in preview) {
-			return (text: string) => theme.bg("toolErrorBg", text);
-		}
-		return (text: string) => theme.bg("toolSuccessBg", text);
-	}
-	if (settledError) {
-		return (text: string) => theme.bg("toolErrorBg", text);
-	}
-	return (text: string) => theme.bg("toolPendingBg", text);
-}
 function buildEditCallComponent(
 	component: EditCallRenderComponent,
 	args: RenderableEditArgs | undefined,
@@ -135,7 +120,7 @@ function buildEditCallComponent(
 	cwd: string,
 	outputPad: number,
 ): EditCallRenderComponent {
-	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
+	component.setBgFn(undefined);
 	component.setPaddingX(outputPad);
 	component.clear();
 	component.addChild(new Text(formatEditCall(args, theme, cwd), 0, 0));
@@ -194,13 +179,21 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 			});
 		}
 
-		return buildEditCallComponent(
+		const content = buildEditCallComponent(
 			component,
 			args as RenderableEditArgs | undefined,
 			theme,
 			context.cwd,
 			context.outputPad,
 		);
+		const borderColor = component.preview
+			? "error" in component.preview
+				? (text: string) => theme.fg("error", text)
+				: (text: string) => theme.fg("success", text)
+			: component.settledError
+				? (text: string) => theme.fg("error", text)
+				: (text: string) => theme.fg("accent", text);
+		return new RoundedBorder(content, borderColor, " Edit");
 	},
 	renderResult(result, _options, theme, context) {
 		const callComponent = context.state.callComponent;

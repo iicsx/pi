@@ -126,6 +126,8 @@ describe("edit tool TUI rendering", () => {
 			() => tui.requestRender(true),
 		);
 		expect(callOnlyRender).toContain("edit");
+		expect(callOnlyRender.replace(/\x1b\[[0-9;]*m/g, "")).toContain("╭  Edit");
+		expect(callOnlyRender).not.toContain("\x1b[48");
 		expect(callOnlyRender).toContain("line 950 changed");
 
 		const redrawsBeforeResult = tui.fullRedraws;
